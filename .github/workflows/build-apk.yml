@@ -1,9 +1,5 @@
 name: Build APK
 
-# 三种触发方式：
-# 1) 你往仓库里提交/上传文件后自动跑
-# 2) 在 Actions 页面点 "Run workflow" 手动跑
-# 3) 发 Release 时跑（可选）
 on:
   push:
     branches:
@@ -18,6 +14,26 @@ jobs:
       - name: 取出代码
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------------
+      # 智能解压：支持直接往仓库根目录上传 zip 压缩包（免解压直接打包）
+      # ---------------------------------------------------------------
+      - name: 检测并自动解压 ZIP 压缩包
+        run: |
+          ZIP_FILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIP_FILE" ]; then
+            echo ">>> 发现上传的压缩包: $ZIP_FILE，正在自动解压..."
+            unzip -o -q "$ZIP_FILE"
+            if [ -d "ao3_reader" ]; then
+              echo ">>> 同步 ao3_reader 目录到工程根目录..."
+              cp -rf ao3_reader/* . 2>/dev/null || true
+              cp -rf ao3_reader/.* . 2>/dev/null || true
+            fi
+            echo ">>> 解压完成！"
+          else
+            echo ">>> 未检测到 zip 压缩包，直接使用仓库内现有源码构建"
+          fi
+          ls -la pubspec.yaml android/key.properties
+
       - name: 安装 Java 17
         uses: actions/setup-java@v4
         with:
@@ -31,18 +47,6 @@ jobs:
           channel: stable
           cache: true
 
-      # ---------------------------------------------------------------
-      # 签名：
-      # 默认直接用仓库里的 android/key.properties + android/app/ao3-release.jks
-      # （私有仓库、免配置，第一次编译出来的包以后就能一直覆盖安装）
-      #
-      # 如果你想改成用 GitHub Secrets（更安全），去 Settings → Secrets and
-      # variables → Actions 里加这 4 个 secret，下面的步骤会自动覆盖掉仓库里的文件：
-      #   KEYSTORE_BASE64   （keystore 文件的 base64）
-      #   STORE_PASSWORD
-      #   KEY_PASSWORD
-      #   KEY_ALIAS
-      # ---------------------------------------------------------------
       - name: 配置签名
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -67,7 +71,6 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: 编译 Release APK
-        # build-number 用 Actions 的序号，保证每次都递增 → 能直接覆盖安装
         run: |
           flutter build apk --release \
             --build-name=0.1.${{ github.run_number }} \
@@ -77,7 +80,6 @@ jobs:
         run: |
           APK=build/app/outputs/flutter-apk/app-release.apk
           ls -la "$APK"
-          # apksigner 在 Android SDK build-tools 里
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$BT/apksigner" verify --print-certs "$APK" | head -5 || true
 
